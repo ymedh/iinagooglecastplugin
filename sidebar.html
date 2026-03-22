@@ -1,184 +1,106 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Chromecast</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; background: #1a1a1a; color: #f0f0f0; padding: 16px; }
-    h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: #fff; }
-    #status { font-size: 12px; color: #aaa; margin-bottom: 14px; }
-    #status.connected { color: #4CAF50; }
-    #status.error { color: #f44336; }
-    #status.scanning { color: #2196F3; }
-    button.primary { width: 100%; padding: 9px; background: #E53935; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; margin-bottom: 14px; }
-    button.primary:hover { background: #C62828; }
-    button.primary:disabled { background: #555; cursor: default; }
-    #devices { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
-    .device-btn { width: 100%; padding: 10px 12px; background: #2a2a2a; border: 1px solid #3a3a3a; border-radius: 8px; color: #eee; font-size: 13px; text-align: left; cursor: pointer; display: flex; align-items: center; gap: 10px; }
-    .device-btn:hover { background: #333; border-color: #E53935; }
-    .device-btn.active { border-color: #4CAF50; background: #1a2e1a; }
-    .device-name { flex: 1; }
-    .device-ip { font-size: 10px; color: #888; }
-    .badge { font-size: 10px; background: #4CAF50; color: white; border-radius: 10px; padding: 2px 7px; }
-    button.secondary { width: 100%; padding: 9px; background: transparent; color: #aaa; border: 1px solid #444; border-radius: 8px; font-size: 13px; cursor: pointer; display: none; margin-top: 4px; }
-    button.secondary:hover { background: #2a2a2a; color: #fff; }
-    #now-playing { margin-top: 14px; padding: 10px 12px; background: #1a2e1a; border: 1px solid #2e4a2e; border-radius: 8px; font-size: 12px; color: #aaa; display: none; }
-    #now-playing strong { color: #fff; display: block; margin-bottom: 4px; }
-    .empty { text-align: center; color: #555; font-size: 12px; padding: 20px 0; }
-    #log { margin-top: 14px; font-size: 10px; color: #666; max-height: 80px; overflow-y: auto; font-family: monospace; }
-  </style>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, sans-serif; font-size: 13px; color: #e0e0e0; background: #1e1e1e; padding: 12px; }
+h2 { font-size: 14px; font-weight: 600; margin-bottom: 10px; color: #fff; }
+#scanBtn { width: 100%; padding: 7px 12px; background: #e74c3c; color: #fff; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; }
+#scanBtn:hover { background: #c0392b; }
+#scanBtn:disabled { background: #555; cursor: default; }
+#status { margin-top: 10px; color: #aaa; font-size: 12px; min-height: 16px; }
+#deviceList { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.device-card { background: #2a2a2a; border: 1px solid #3a3a3a; border-radius: 8px; padding: 9px 11px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.device-name { font-weight: 500; color: #fff; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.device-ip { font-size: 11px; color: #888; white-space: nowrap; }
+.cast-btn { background: #e74c3c; color: #fff; border: none; border-radius: 5px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.cast-btn:hover { background: #c0392b; }
+.cast-btn:disabled { background: #555; cursor: default; }
+#error { margin-top: 10px; background: #3a1a1a; border: 1px solid #6b2c2c; border-radius: 6px; padding: 8px 10px; color: #e07070; font-size: 12px; display: none; }
+#castResult { margin-top: 8px; font-size: 12px; display: none; padding: 6px 10px; border-radius: 6px; }
+#castResult.ok { background: #1a3a1a; color: #70e070; border: 1px solid #2c6b2c; }
+#castResult.fail { background: #3a1a1a; color: #e07070; border: 1px solid #6b2c2c; }
+</style>
 </head>
 <body>
-<h2>📡 Chromecast</h2>
-<div id="status">Press Scan to discover devices.</div>
-<button class="primary" id="scan-btn" onclick="startScan()">🔍 Scan for Devices</button>
-<div id="devices"><div class="empty">No devices found yet.</div></div>
-<button class="secondary" id="stop-btn" onclick="stopCasting()">⏹ Stop Casting</button>
-<div id="now-playing">
-  <strong id="np-title"></strong>
-  <span id="np-url" style="word-break:break-all;font-size:10px;"></span>
-</div>
-<div id="log"></div>
+<h2>📺 Google Cast</h2>
+<button id="scanBtn">Scan for Devices</button>
+<div id="status"></div>
+<div id="error"></div>
+<div id="castResult"></div>
+<div id="deviceList"></div>
 <script>
-'use strict';
-const CAST_PORT = 8009;
-const APP_ID    = 'CC1AD845';
-let devices = [], activeDevice = null, currentUrl = null, currentTitle = null;
+var scanBtn = document.getElementById('scanBtn');
+var statusEl = document.getElementById('status');
+var errorEl = document.getElementById('error');
+var castResultEl = document.getElementById('castResult');
+var deviceListEl = document.getElementById('deviceList');
 
-function sanitize(str) {
-  if (typeof str !== 'string') return '';
-  const el = document.createElement('div');
-  el.textContent = str;
-  return el.innerHTML;
-}
-function log(msg) {
-  const el = document.getElementById('log');
-  const line = document.createElement('div');
-  line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
-  el.appendChild(line);
-  el.scrollTop = el.scrollHeight;
-}
-function setStatus(msg, type) {
-  const el = document.getElementById('status');
-  el.textContent = msg;
-  el.className = type || '';
-}
-function startScan() {
-  const btn = document.getElementById('scan-btn');
-  btn.disabled = true;
-  btn.textContent = '⏳ Scanning...';
-  setStatus('Scanning local network for Chromecast devices...', 'scanning');
-  devices = [];
-  renderDevices();
-  log('Starting mDNS scan');
-  iina.postMessage('execScan');
-  setTimeout(() => {
-    btn.disabled = false;
-    btn.textContent = '🔍 Scan for Devices';
-    if (devices.length === 0) {
-      setStatus('No devices found. Are you on the same Wi-Fi?', 'error');
-      log('Scan complete - no devices found');
-    } else {
-      setStatus('Found ' + devices.length + ' device(s). Click to cast.');
-      log('Scan complete - ' + devices.length + ' device(s) found');
-    }
-  }, 5000);
-}
-function onDeviceFound(name, ip) {
-  if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) { log('Ignored invalid IP'); return; }
-  if (devices.find(d => d.ip === ip)) return;
-  const safeName = sanitize(name);
-  const safeIp   = sanitize(ip);
-  devices.push({ name: safeName, ip: safeIp });
-  log('Found: ' + safeName + ' @ ' + safeIp);
-  renderDevices();
-}
-function renderDevices() {
-  const container = document.getElementById('devices');
-  container.innerHTML = '';
-  if (devices.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'empty';
-    empty.textContent = 'No devices found yet.';
-    container.appendChild(empty);
-    return;
+scanBtn.addEventListener('click', function() {
+  scanBtn.disabled = true;
+  deviceListEl.innerHTML = '';
+  errorEl.style.display = 'none';
+  castResultEl.style.display = 'none';
+  statusEl.textContent = 'Scanning...';
+  iina.postMessage('execScan', {});
+});
+
+iina.onMessage('status', function(data) {
+  statusEl.textContent = data.text;
+});
+
+iina.onMessage('devices', function(data) {
+  scanBtn.disabled = false;
+  if (data.error) {
+    errorEl.textContent = data.error;
+    errorEl.style.display = 'block';
+    statusEl.textContent = '';
   }
-  devices.forEach(d => {
-    const isActive = activeDevice && activeDevice.ip === d.ip;
-    const btn = document.createElement('button');
-    btn.className = 'device-btn' + (isActive ? ' active' : '');
-    const icon = document.createElement('span');
-    icon.textContent = '📺';
-    icon.style.fontSize = '20px';
-    const nameWrap = document.createElement('span');
-    nameWrap.className = 'device-name';
-    nameWrap.textContent = d.name;
-    const ipSpan = document.createElement('span');
-    ipSpan.className = 'device-ip';
-    ipSpan.textContent = d.ip;
-    nameWrap.appendChild(document.createElement('br'));
-    nameWrap.appendChild(ipSpan);
-    btn.appendChild(icon);
-    btn.appendChild(nameWrap);
-    if (isActive) {
-      const badge = document.createElement('span');
-      badge.className = 'badge';
-      badge.textContent = 'Live';
-      btn.appendChild(badge);
-    }
-    btn.onclick = () => connectTo(d);
-    container.appendChild(btn);
+  if (data.devices && data.devices.length > 0) {
+    errorEl.style.display = 'none';
+    statusEl.textContent = '';
+    deviceListEl.innerHTML = '';
+    data.devices.forEach(function(dev) {
+      var card = document.createElement('div');
+      card.className = 'device-card';
+
+      var nameEl = document.createElement('div');
+      nameEl.className = 'device-name';
+      nameEl.textContent = dev.name;
+
+      var ipEl = document.createElement('div');
+      ipEl.className = 'device-ip';
+      ipEl.textContent = dev.ip;
+
+      var btn = document.createElement('button');
+      btn.className = 'cast-btn';
+      btn.textContent = 'Cast';
+      btn.addEventListener('click', function() {
+        btn.disabled = true;
+        btn.textContent = '...';
+        castResultEl.style.display = 'none';
+        iina.postMessage('castTo', { ip: dev.ip, port: dev.port });
+      });
+
+      card.appendChild(nameEl);
+      card.appendChild(ipEl);
+      card.appendChild(btn);
+      deviceListEl.appendChild(card);
+    });
+  }
+});
+
+iina.onMessage('castResult', function(data) {
+  document.querySelectorAll('.cast-btn').forEach(function(b) {
+    b.disabled = false;
+    b.textContent = 'Cast';
   });
-}
-function connectTo(device) {
-  activeDevice = device;
-  setStatus('Connecting to ' + device.name + '...', 'scanning');
-  log('Connecting to ' + device.ip + ':' + CAST_PORT);
-  renderDevices();
-  iina.postMessage('castConnect', { ip: device.ip, port: CAST_PORT });
-}
-function onConnected() {
-  setStatus('Connected to ' + activeDevice.name, 'connected');
-  document.getElementById('stop-btn').style.display = 'block';
-  iina.postMessage('castStatus', { connected: true, deviceName: activeDevice.name });
-  log('Connected!');
-  renderDevices();
-  if (currentUrl) castMedia(currentUrl, currentTitle);
-}
-function onDisconnected() {
-  activeDevice = null;
-  setStatus('Disconnected.');
-  document.getElementById('stop-btn').style.display = 'none';
-  document.getElementById('now-playing').style.display = 'none';
-  iina.postMessage('castStatus', { connected: false, deviceName: null });
-  log('Disconnected');
-  renderDevices();
-}
-function castMedia(url, title) {
-  if (!activeDevice) return;
-  currentUrl = url; currentTitle = title;
-  log('Casting: ' + url);
-  iina.postMessage('castMedia', { url, title: title || 'IINA Video', appId: APP_ID });
-  document.getElementById('np-title').textContent = title || url;
-  document.getElementById('np-url').textContent = url;
-  document.getElementById('now-playing').style.display = 'block';
-  setStatus('Casting: ' + (title || 'video'), 'connected');
-}
-function stopCasting() {
-  iina.postMessage('castStop');
-  onDisconnected();
-}
-iina.onMessage('newFile',          (d) => { currentUrl = d.url; currentTitle = d.title; if (activeDevice) castMedia(currentUrl, currentTitle); });
-iina.onMessage('playerPause',      ()  => { if (activeDevice) iina.postMessage('castPause'); });
-iina.onMessage('playerResume',     ()  => { if (activeDevice) iina.postMessage('castResume'); });
-iina.onMessage('playerSeek',       (d) => { if (activeDevice) iina.postMessage('castSeek', { position: d.position }); });
-iina.onMessage('stopCast',         ()  => stopCasting());
-iina.onMessage('requestDevices',   ()  => renderDevices());
-iina.onMessage('castConnected',    ()  => onConnected());
-iina.onMessage('castDisconnected', ()  => onDisconnected());
-iina.onMessage('deviceFound',      (d) => onDeviceFound(d.name, d.ip));
-iina.onMessage('castLog',          (d) => log(d.msg));
+  castResultEl.className = data.ok ? 'ok' : 'fail';
+  castResultEl.textContent = data.ok ? '✓ Casting started!' : '✗ ' + (data.error || 'Cast failed.');
+  castResultEl.style.display = 'block';
+});
 </script>
 </body>
 </html>

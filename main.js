@@ -18,32 +18,21 @@ async function run(cmd) {
   }
 }
 
-async function resolveHostname(hostname) {
-  iina.log('[Cast] Trying ping for: ' + hostname);
-  const pingOut = await run('ping -c 1 -W 3 -t 3 "' + hostname + '" 2>&1');
-  iina.log('[Cast] ping output: ' + pingOut);
-  const m = pingOut.match(/\((\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\)/);
-  if (m && validateIP(m[1])) {
-    iina.log('[Cast] ping resolved to: ' + m[1]);
-    return m[1];
+async function findCatt() {
+  const candidates = [
+    '/Library/Frameworks/Python.framework/Versions/3.11/bin/catt',
+    '/usr/local/bin/catt',
+    '/opt/homebrew/bin/catt',
+    '/usr/bin/catt',
+  ];
+  for (const p of candidates) {
+    const ok = await run(`test -f "${p}" && echo yes`);
+    if (ok.trim() === 'yes') return p;
   }
-
-  iina.log('[Cast] Trying arp for: ' + hostname);
-  await run('ping -c 1 -W 3 -t 3 "' + hostname + '" 2>/dev/null');
-  const arpOut = await run('arp -a');
-  iina.log('[Cast] arp output: ' + arpOut);
-  const base = hostname.replace(/\.local$/, '');
-  for (const line of arpOut.split('\n')) {
-    if (line.toLowerCase().includes(base.toLowerCase())) {
-      const am = line.match(/\((\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\)/);
-      if (am && validateIP(am[1])) {
-        iina.log('[Cast] arp resolved to: ' + am[1]);
-        return am[1];
-      }
-    }
-  }
-
-  iina.log('[Cast] All resolution methods failed for: ' + hostname);
+  const whichOut = await run('which catt 2>/dev/null');
+  if (whichOut.trim()) return whichOut.trim();
+  const pyCheck = await run('python3 -m catt --version 2>/dev/null');
+  if (pyCheck.trim()) return 'python3 -m catt';
   return null;
 }
 
@@ -51,7 +40,8 @@ async function discoverDevices() {
   iina.log('[Cast] Starting discovery...');
   sidebar.sendMessage('status', { text: 'Scanning...' });
 
-  const browseOut = await run('timeout 6 dns-sd -B _googlecast._tcp local 2>/dev/null');
+  // Use dns-sd browse with a short timeout, parse results
+  const browseOut = await run('timeout 5 dns-sd -B _googlecast._tcp local 2>/dev/null');
   iina.log('[Cast] browse output: ' + browseOut);
 
   const instances = [];
@@ -61,20 +51,18 @@ async function discoverDevices() {
   }
 
   if (instances.length === 0) {
-    iina.log('[Cast] No devices found in browse');
     sidebar.sendMessage('devices', { devices: [], error: 'No Cast devices found. Make sure your Chromecast is on the same WiFi network.' });
     return;
   }
 
   iina.log('[Cast] Found instances: ' + instances.join(', '));
-  sidebar.sendMessage('status', { text: 'Found ' + instances.length + ' device(s), resolving IPs...' });
+  sidebar.sendMessage('status', { text: `Found ${instances.length} device(s), resolving...` });
 
   const devices = [];
 
   for (const instance of instances) {
-    iina.log('[Cast] Looking up: ' + instance);
-    const lookupOut = await run('timeout 4 dns-sd -L "' + instance + '" _googlecast._tcp local 2>/dev/null');
-    iina.log('[Cast] lookup output: ' + lookupOut);
+    const lookupOut = await run(`timeout 3 dns-sd -L "${instance}" _googlecast._tcp local 2>/dev/null`);
+    iina.log('[Cast] lookup: ' + lookupOut);
 
     let friendlyName = null;
     let hostname = null;
@@ -82,29 +70,33 @@ async function discoverDevices() {
     for (const line of lookupOut.split('\n')) {
       const hostMatch = line.match(/can be reached at ([a-zA-Z0-9\-]+\.local)/i);
       if (hostMatch) hostname = hostMatch[1];
-      const fnMatch = line.match(/fn=([^" ]+)/i);
-      if (fnMatch) friendlyName = fnMatch[1].trim();
+      const fnMatch = line.match(/fn=([^" \t]+)/i);
+      if (fnMatch) friendlyName = decodeURIComponent(fnMatch[1].replace(/\\032/g, ' ').replace(/\\(.)/g, '$1')).trim();
     }
 
-    iina.log('[Cast] name=' + friendlyName + ' hostname=' + hostname);
     const label = sanitizeText(friendlyName || instance);
+    iina.log('[Cast] name=' + label + ' hostname=' + hostname);
 
-    if (!hostname) {
-      iina.log('[Cast] No hostname, skipping');
+    if (!hostname) continue;
+
+    // Resolve hostname to IP via ping (fast, built-in)
+    const pingOut = await run(`ping -c 1 -W 2 -t 2 "${hostname}" 2>&1`);
+    const ipMatch = pingOut.match(/\((\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\)/);
+    if (!ipMatch || !validateIP(ipMatch[1])) {
+      iina.log('[Cast] Could not resolve IP for ' + hostname);
       continue;
     }
 
-    const ip = await resolveHostname(hostname);
-    if (!ip) continue;
-
-    devices.push({ name: label, ip: ip, port: CAST_PORT });
+    const ip = ipMatch[1];
+    iina.log('[Cast] Resolved ' + hostname + ' -> ' + ip);
+    devices.push({ name: label, ip, port: CAST_PORT });
     sidebar.sendMessage('devices', { devices: devices.slice() });
   }
 
   if (devices.length === 0) {
-    sidebar.sendMessage('devices', { devices: [], error: 'Device found but IP could not be resolved. Check IINA logs for details.' });
+    sidebar.sendMessage('devices', { devices: [], error: 'Device found but IP could not be resolved. Check IINA logs.' });
   } else {
-    sidebar.sendMessage('status', { text: devices.length + ' device(s) ready.' });
+    sidebar.sendMessage('status', { text: `${devices.length} device(s) ready.` });
   }
 }
 
@@ -118,16 +110,25 @@ async function castToDevice(ip, port) {
     sidebar.sendMessage('castResult', { ok: false, error: 'Invalid IP.' });
     return;
   }
-  iina.log('[Cast] Casting ' + url + ' to ' + ip + ':' + port);
-  const cattPath = await run('which catt 2>/dev/null');
-  if (!cattPath.trim()) {
-    sidebar.sendMessage('castResult', { ok: false, error: 'catt not installed. Run: pip3 install catt' });
+
+  const cattCmd = await findCatt();
+  if (!cattCmd) {
+    sidebar.sendMessage('castResult', {
+      ok: false,
+      error: 'catt not found. Install it: pip3 install catt  (then restart IINA)'
+    });
     return;
   }
+
+  iina.log('[Cast] Using catt: ' + cattCmd);
+  iina.log('[Cast] Casting ' + url + ' to ' + ip + ':' + port);
+
   const safeUrl = url.replace(/'/g, "'\\''");
-  const out = await run("catt -d '" + ip + "' cast '" + safeUrl + "' 2>&1");
-  const ok = !out.toLowerCase().includes('error');
-  sidebar.sendMessage('castResult', { ok: ok, error: ok ? null : out.slice(0, 200) });
+  const out = await run(`${cattCmd} -d "${ip}" cast "${safeUrl}" 2>&1`);
+  iina.log('[Cast] catt output: ' + out);
+
+  const ok = out.length === 0 || (!out.toLowerCase().includes('error') && !out.toLowerCase().includes('traceback'));
+  sidebar.sendMessage('castResult', { ok, error: ok ? null : out.slice(0, 300) });
 }
 
 sidebar.onMessage('execScan', function() {

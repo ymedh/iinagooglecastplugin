@@ -2,8 +2,6 @@
   "name": "Google Cast",
   "identifier": "io.github.ymedh.iina-plugin-googlecast",
   "version": "2.3.0",
-  "apiVersion": "1.1",
-  "minimumIINAVersion": "1.3.0",
   "ghRepo": "ymedh/iinagooglecastplugin",
   "ghVersion": 2,
   "description": "Cast the current video from IINA to any Google Cast device on your local network.",

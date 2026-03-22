@@ -1,3 +1,5 @@
+sidebar.loadFile('sidebar.html');
+
 const CAST_PORT = 8009;
 
 function sanitizeText(str) {

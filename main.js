@@ -34,11 +34,25 @@ async function init() {
     if (w) PYTHON = w;
   }
 
-  // Find server.py relative to plugin install location
-  const dataPath = utils.resolvePath('@data');
-  // dataPath is like ~/Library/Application Support/com.colliderli.iina/plugins/<id>/data
-  // server.py is in the plugin root, two levels up from data
-  SERVER_PY = dataPath.replace(/\/[^/]+\/[^/]+$/, '') + '/server.py';
+  // Copy server.py to @data dir on every startup to keep it current
+  const serverDest = utils.resolvePath('@data/server.py');
+  // @data is at plugins/.data/<identifier>/ so plugins dir is two levels up
+  const pluginsDir = serverDest.replace(/\/\.data\/.*$/, '');
+  const serverSrc = pluginsDir + '/iinagooglecastplugin.iinaplugin-dev/server.py';
+  await utils.exec('/bin/sh', ['-c', `cp "${serverSrc}" "${serverDest}"`]);
+  SERVER_PY = serverDest;
+
+  // Find python3 - try known locations
+  for (const p of ['/usr/bin/python3', '/usr/local/bin/python3', '/opt/homebrew/bin/python3',
+    '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3',
+    '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3']) {
+    const ok = (await utils.exec('/bin/sh', ['-c', `test -f "${p}" && echo yes`])).stdout.trim();
+    if (ok === 'yes') { PYTHON = p; break; }
+  }
+  if (!PYTHON) {
+    const w = (await utils.exec('/bin/sh', ['-c', 'which python3 2>/dev/null'])).stdout.trim();
+    if (w) PYTHON = w;
+  }
   iina.console.log('[Cast] python=' + PYTHON + ' server=' + SERVER_PY);
 }
 const PAGE_HTML = '/tmp/iina_cast_page.html';
@@ -57,6 +71,11 @@ function toLocalPath(url) {
 async function run(cmd) {
   try { return (await utils.exec('/bin/sh', ['-c', cmd])).stdout || ''; }
   catch(e) { return ''; }
+}
+
+async function getLocalIP() {
+  const out = (await utils.exec('/bin/sh', ['-c', 'ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null'])).stdout.trim();
+  return out || '127.0.0.1';
 }
 
 function buildCastPage(mediaUrl) {
@@ -87,7 +106,8 @@ async function openCastPage() {
 
   const local = isLocalFile(url);
   const filePath = local ? toLocalPath(url) : '';
-  const mediaUrl = local ? ('http://localhost:' + HTTP_PORT + '/video') : url;
+  const localIP = await getLocalIP();
+  const mediaUrl = local ? ('http://' + localIP + ':' + HTTP_PORT + '/video') : url;
   const html = buildCastPage(mediaUrl);
 
   // Write cast page and launcher via shell

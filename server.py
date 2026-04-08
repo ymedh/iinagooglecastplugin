@@ -80,4 +80,4 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 remaining -= len(chunk)
 
 
-Server(("127.0.0.1", PORT), Handler).serve_forever()
+Server(("0.0.0.0", PORT), Handler).serve_forever()

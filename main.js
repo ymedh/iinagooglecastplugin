@@ -5,6 +5,7 @@ const { sidebar, utils, event, core } = iina;
 event.on('iina.window-loaded', function() {
   iina.console.log('[Cast] window loaded, loading sidebar');
   sidebar.loadFile('sidebar.html');
+  init().catch(function(e) { iina.console.log('[Cast] init error: ' + e); });
 
   sidebar.onMessage('cast', function() {
     iina.console.log('[Cast] cast message received');
@@ -15,9 +16,31 @@ event.on('iina.window-loaded', function() {
   });
 });
 
-const PYTHON = '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3';
 const HTTP_PORT = 19421;
-const SERVER_PY = '/Users/andychoe/Library/Application Support/com.colliderli.iina/plugins/iinagooglecastplugin.iinaplugin-dev/server.py';
+// Resolved at startup
+let PYTHON = null;
+let SERVER_PY = null;
+
+async function init() {
+  // Find python3
+  for (const p of ['/usr/bin/python3', '/usr/local/bin/python3', '/opt/homebrew/bin/python3',
+    '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3',
+    '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3']) {
+    const ok = (await utils.exec('/bin/sh', ['-c', `test -f "${p}" && echo yes`])).stdout.trim();
+    if (ok === 'yes') { PYTHON = p; break; }
+  }
+  if (!PYTHON) {
+    const w = (await utils.exec('/bin/sh', ['-c', 'which python3 2>/dev/null'])).stdout.trim();
+    if (w) PYTHON = w;
+  }
+
+  // Find server.py relative to plugin install location
+  const dataPath = utils.resolvePath('@data');
+  // dataPath is like ~/Library/Application Support/com.colliderli.iina/plugins/<id>/data
+  // server.py is in the plugin root, two levels up from data
+  SERVER_PY = dataPath.replace(/\/[^/]+\/[^/]+$/, '') + '/server.py';
+  iina.console.log('[Cast] python=' + PYTHON + ' server=' + SERVER_PY);
+}
 const PAGE_HTML = '/tmp/iina_cast_page.html';
 
 function isLocalFile(url) {
@@ -52,6 +75,10 @@ function buildCastPage(mediaUrl) {
 }
 
 async function openCastPage() {
+  if (!PYTHON) {
+    sidebar.postMessage('status', { text: 'Python 3 not found. Please install it from python.org.', error: true });
+    return;
+  }
   const url = core.status.url || '';
   if (!url) {
     sidebar.postMessage('status', { text: 'No media loaded in IINA.', error: true });

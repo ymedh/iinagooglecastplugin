@@ -10,8 +10,8 @@
     "url": "https://github.com/ymedh"
   },
   "entry": "main.js",
-  "global": "global.js",
-  "permissions": ["network-request", "show-osd"],
+  "globalEntry": "global.js",
+  "permissions": ["network-request", "show-osd", "file-system"],
   "allowedDomains": ["*"],
   "sidebarTab": {
     "name": "Google Cast"

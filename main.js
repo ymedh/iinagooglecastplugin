@@ -1,148 +1,86 @@
-sidebar.loadFile('sidebar.html');
+iina.console.log('[Cast] main.js loaded');
 
-const CAST_PORT = 8009;
+const { sidebar, utils, event, core } = iina;
 
-function sanitizeText(str) {
-  return String(str).replace(/[^a-zA-Z0-9 ._\-:@]/g, '');
+event.on('iina.window-loaded', function() {
+  iina.console.log('[Cast] window loaded, loading sidebar');
+  sidebar.loadFile('sidebar.html');
+
+  sidebar.onMessage('cast', function() {
+    iina.console.log('[Cast] cast message received');
+    openCastPage().catch(function(e) {
+      iina.console.log('[Cast] Error: ' + e);
+      sidebar.postMessage('status', { text: String(e), error: true });
+    });
+  });
+});
+
+const PYTHON = '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3';
+const HTTP_PORT = 19421;
+const SERVER_PY = '/Users/andychoe/Library/Application Support/com.colliderli.iina/plugins/iinagooglecastplugin.iinaplugin-dev/server.py';
+const PAGE_HTML = '/tmp/iina_cast_page.html';
+
+function isLocalFile(url) {
+  return url && (url.startsWith('file://') || url.startsWith('/'));
 }
 
-function validateIP(ip) {
-  return /^(\d{1,3}\.){3}\d{1,3}$/.test(ip) &&
-    ip.split('.').every(n => parseInt(n) <= 255);
+function toLocalPath(url) {
+  // file:///Volumes/... -> slice(7) gives /Volumes/...
+  // file://Volumes/...  -> slice(7) gives Volumes/... (needs leading slash)
+  const path = decodeURIComponent(url.slice(7));
+  return path.startsWith('/') ? path : '/' + path;
 }
 
 async function run(cmd) {
-  try {
-    const result = await utils.exec('/bin/sh', ['-c', cmd]);
-    return result.stdout || '';
-  } catch (e) {
-    return '';
-  }
+  try { return (await utils.exec('/bin/sh', ['-c', cmd])).stdout || ''; }
+  catch(e) { return ''; }
 }
 
-async function findCatt() {
-  const candidates = [
-    '/Library/Frameworks/Python.framework/Versions/3.11/bin/catt',
-    '/usr/local/bin/catt',
-    '/opt/homebrew/bin/catt',
-    '/usr/bin/catt',
-  ];
-  for (const p of candidates) {
-    const ok = await run(`test -f "${p}" && echo yes`);
-    if (ok.trim() === 'yes') return p;
-  }
-  const whichOut = await run('which catt 2>/dev/null');
-  if (whichOut.trim()) return whichOut.trim();
-  const pyCheck = await run('python3 -m catt --version 2>/dev/null');
-  if (pyCheck.trim()) return 'python3 -m catt';
-  return null;
+function buildCastPage(mediaUrl) {
+  const so = '<scr' + 'ipt>';
+  const sc = '<' + '/scr' + 'ipt>';
+  const js = 'document.getElementById("v").src=' + JSON.stringify(mediaUrl) + ';';
+  return [
+    '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>IINA Cast</title>',
+    '<style>body{margin:0;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:12px;font-family:-apple-system,sans-serif;color:#fff}video{max-width:100%;max-height:80vh}p{font-size:13px;color:#aaa;text-align:center;margin:0}b{color:#fff}</style>',
+    '</head><body>',
+    '<video id="v" controls autoplay></video>',
+    '<p>Use the <b>Cast button</b> in Chrome\'s toolbar to cast to your device</p>',
+    so, js, sc,
+    '</body></html>'
+  ].join('\n');
 }
 
-async function discoverDevices() {
-  iina.log('[Cast] Starting discovery...');
-  sidebar.sendMessage('status', { text: 'Scanning...' });
-
-  // Use dns-sd browse with a short timeout, parse results
-  const browseOut = await run('timeout 5 dns-sd -B _googlecast._tcp local 2>/dev/null');
-  iina.log('[Cast] browse output: ' + browseOut);
-
-  const instances = [];
-  for (const line of browseOut.split('\n')) {
-    const m = line.match(/Add\s+\S+\s+\d+\s+\S+\s+_googlecast\._tcp\.\s+(.+)/);
-    if (m) instances.push(m[1].trim());
-  }
-
-  if (instances.length === 0) {
-    sidebar.sendMessage('devices', { devices: [], error: 'No Cast devices found. Make sure your Chromecast is on the same WiFi network.' });
-    return;
-  }
-
-  iina.log('[Cast] Found instances: ' + instances.join(', '));
-  sidebar.sendMessage('status', { text: `Found ${instances.length} device(s), resolving...` });
-
-  const devices = [];
-
-  for (const instance of instances) {
-    const lookupOut = await run(`timeout 3 dns-sd -L "${instance}" _googlecast._tcp local 2>/dev/null`);
-    iina.log('[Cast] lookup: ' + lookupOut);
-
-    let friendlyName = null;
-    let hostname = null;
-
-    for (const line of lookupOut.split('\n')) {
-      const hostMatch = line.match(/can be reached at ([a-zA-Z0-9\-]+\.local)/i);
-      if (hostMatch) hostname = hostMatch[1];
-      const fnMatch = line.match(/fn=([^" \t]+)/i);
-      if (fnMatch) friendlyName = decodeURIComponent(fnMatch[1].replace(/\\032/g, ' ').replace(/\\(.)/g, '$1')).trim();
-    }
-
-    const label = sanitizeText(friendlyName || instance);
-    iina.log('[Cast] name=' + label + ' hostname=' + hostname);
-
-    if (!hostname) continue;
-
-    // Resolve hostname to IP via ping (fast, built-in)
-    const pingOut = await run(`ping -c 1 -W 2 -t 2 "${hostname}" 2>&1`);
-    const ipMatch = pingOut.match(/\((\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\)/);
-    if (!ipMatch || !validateIP(ipMatch[1])) {
-      iina.log('[Cast] Could not resolve IP for ' + hostname);
-      continue;
-    }
-
-    const ip = ipMatch[1];
-    iina.log('[Cast] Resolved ' + hostname + ' -> ' + ip);
-    devices.push({ name: label, ip, port: CAST_PORT });
-    sidebar.sendMessage('devices', { devices: devices.slice() });
-  }
-
-  if (devices.length === 0) {
-    sidebar.sendMessage('devices', { devices: [], error: 'Device found but IP could not be resolved. Check IINA logs.' });
-  } else {
-    sidebar.sendMessage('status', { text: `${devices.length} device(s) ready.` });
-  }
-}
-
-async function castToDevice(ip, port) {
-  const url = iina.core.url;
+async function openCastPage() {
+  const url = core.status.url || '';
   if (!url) {
-    sidebar.sendMessage('castResult', { ok: false, error: 'No media loaded in IINA.' });
-    return;
-  }
-  if (!validateIP(ip)) {
-    sidebar.sendMessage('castResult', { ok: false, error: 'Invalid IP.' });
+    sidebar.postMessage('status', { text: 'No media loaded in IINA.', error: true });
     return;
   }
 
-  const cattCmd = await findCatt();
-  if (!cattCmd) {
-    sidebar.sendMessage('castResult', {
-      ok: false,
-      error: 'catt not found. Install it: pip3 install catt  (then restart IINA)'
-    });
-    return;
-  }
+  const local = isLocalFile(url);
+  const filePath = local ? toLocalPath(url) : '';
+  const mediaUrl = local ? ('http://localhost:' + HTTP_PORT + '/video') : url;
+  const html = buildCastPage(mediaUrl);
 
-  iina.log('[Cast] Using catt: ' + cattCmd);
-  iina.log('[Cast] Casting ' + url + ' to ' + ip + ':' + port);
+  // Write cast page and launcher via shell
+  const safeHtml = html.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
+  await utils.exec('/bin/sh', ['-c', "printf '%s' '" + safeHtml + "' > /tmp/iina_cast_page.html"]);
 
-  const safeUrl = url.replace(/'/g, "'\\''");
-  const out = await run(`${cattCmd} -d "${ip}" cast "${safeUrl}" 2>&1`);
-  iina.log('[Cast] catt output: ' + out);
+  const launcher = '/tmp/iina_cast_launch.sh';
+  const script = [
+    '#!/bin/sh',
+    'pkill -f "server.py" 2>/dev/null',
+    'sleep 0.5',
+    'nohup "' + PYTHON + '" "' + SERVER_PY + '" "$1" "/tmp/iina_cast_page.html" > /tmp/iina_cast.log 2>&1 &',
+    'sleep 1',
+    'open -a "Google Chrome" "http://localhost:' + HTTP_PORT + '"'
+  ].join('\n');
+  const safeScript = script.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
+  await utils.exec('/bin/sh', ['-c', "printf '%s' '" + safeScript + "' > " + launcher + " && chmod +x " + launcher]);
+  await utils.exec('/bin/sh', [launcher, filePath]);
 
-  const ok = out.length === 0 || (!out.toLowerCase().includes('error') && !out.toLowerCase().includes('traceback'));
-  sidebar.sendMessage('castResult', { ok, error: ok ? null : out.slice(0, 300) });
+  sidebar.postMessage('status', { text: 'Opening Chrome...' });
 }
 
-sidebar.onMessage('execScan', function() {
-  discoverDevices().catch(function(e) {
-    iina.log('[Cast] Error: ' + e);
-    sidebar.sendMessage('devices', { devices: [], error: String(e) });
-  });
-});
 
-sidebar.onMessage('castTo', function(data) {
-  castToDevice(data.ip, data.port || CAST_PORT).catch(function(e) {
-    iina.log('[Cast] Cast error: ' + e);
-    sidebar.sendMessage('castResult', { ok: false, error: String(e) });
-  });
-});

@@ -3,29 +3,36 @@ iina.console.log('[Cast] main.js loaded');
 const { sidebar, utils, event, core } = iina;
 
 event.on('iina.window-loaded', function() {
-  iina.console.log('[Cast] window loaded, loading sidebar');
   sidebar.loadFile('sidebar.html');
   init().catch(function(e) { iina.console.log('[Cast] init error: ' + e); });
 
   sidebar.onMessage('cast', function() {
-    iina.console.log('[Cast] cast message received');
     openCastPage().catch(function(e) {
-      iina.console.log('[Cast] Error: ' + e);
       sidebar.postMessage('status', { text: String(e), error: true });
     });
   });
 });
 
 const HTTP_PORT = 19421;
-// Resolved at startup
 let PYTHON = null;
 let SERVER_PY = null;
+let CLOUDFLARED = null;
+let CHROME = null;
 
 async function init() {
-  // Find python3
-  for (const p of ['/usr/bin/python3', '/usr/local/bin/python3', '/opt/homebrew/bin/python3',
-    '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3',
-    '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3']) {
+  // --- Python: check known paths then fall back to `which` ---
+  const pythonCandidates = [
+    '/usr/bin/python3',
+    '/usr/local/bin/python3',
+    '/opt/homebrew/bin/python3',
+  ];
+  // Dynamically add versioned framework paths for 3.9–3.15
+  for (let v = 9; v <= 15; v++) {
+    pythonCandidates.push(
+      `/Library/Frameworks/Python.framework/Versions/3.${v}/bin/python3`
+    );
+  }
+  for (const p of pythonCandidates) {
     const ok = (await utils.exec('/bin/sh', ['-c', `test -f "${p}" && echo yes`])).stdout.trim();
     if (ok === 'yes') { PYTHON = p; break; }
   }
@@ -34,60 +41,98 @@ async function init() {
     if (w) PYTHON = w;
   }
 
-  // Copy server.py to @data dir on every startup to keep it current
+  // --- server.py: resolve path dynamically from @data, no hardcoded plugin folder name ---
   const serverDest = utils.resolvePath('@data/server.py');
-  // @data is at plugins/.data/<identifier>/ so plugins dir is two levels up
-  const pluginsDir = serverDest.replace(/\/\.data\/.*$/, '');
-  const serverSrc = pluginsDir + '/iinagooglecastplugin.iinaplugin-dev/server.py';
-  await utils.exec('/bin/sh', ['-c', `cp "${serverSrc}" "${serverDest}"`]);
+  // Walk up from @data to find the plugin's own server.py by searching sibling plugin dirs
+  const dataDir = serverDest.replace(/\/server\.py$/, '');
+  const pluginsDir = dataDir.replace(/\/\.data\/[^/]+$/, '');
+  // Find the actual plugin folder name at runtime (handles both -dev and installed variants)
+  const findSrc = `find "${pluginsDir}" -maxdepth 2 -name "server.py" ! -path "*/.data/*" 2>/dev/null | head -1`;
+  const serverSrc = (await utils.exec('/bin/sh', ['-c', findSrc])).stdout.trim();
+  if (serverSrc) {
+    await utils.exec('/bin/sh', ['-c', `cp "${serverSrc}" "${serverDest}"`]);
+  }
   SERVER_PY = serverDest;
 
-  // Find python3 - try known locations
-  for (const p of ['/usr/bin/python3', '/usr/local/bin/python3', '/opt/homebrew/bin/python3',
-    '/Library/Frameworks/Python.framework/Versions/3.11/bin/python3',
-    '/Library/Frameworks/Python.framework/Versions/3.12/bin/python3']) {
+  // --- cloudflared: check known paths then `which` then brew install ---
+  const cfCandidates = [
+    '/usr/local/bin/cloudflared',
+    '/opt/homebrew/bin/cloudflared',
+    '/opt/homebrew/opt/cloudflared/bin/cloudflared',
+  ];
+  for (const p of cfCandidates) {
     const ok = (await utils.exec('/bin/sh', ['-c', `test -f "${p}" && echo yes`])).stdout.trim();
-    if (ok === 'yes') { PYTHON = p; break; }
+    if (ok === 'yes') { CLOUDFLARED = p; break; }
   }
-  if (!PYTHON) {
-    const w = (await utils.exec('/bin/sh', ['-c', 'which python3 2>/dev/null'])).stdout.trim();
-    if (w) PYTHON = w;
+  if (!CLOUDFLARED) {
+    const w = (await utils.exec('/bin/sh', ['-c', 'which cloudflared 2>/dev/null'])).stdout.trim();
+    if (w) CLOUDFLARED = w;
   }
-  iina.console.log('[Cast] python=' + PYTHON + ' server=' + SERVER_PY);
+  if (!CLOUDFLARED) {
+    await utils.exec('/bin/sh', ['-c', 'brew install cloudflared 2>/dev/null']);
+    const w = (await utils.exec('/bin/sh', ['-c', 'which cloudflared 2>/dev/null'])).stdout.trim();
+    CLOUDFLARED = w || null;
+  }
+
+  // --- Chrome: find whichever Chromium-based browser is available ---
+  const chromeCandidates = [
+    'Google Chrome', 'Chromium', 'Google Chrome Canary', 'Google Chrome Beta', 'Brave Browser', 'Microsoft Edge'
+  ];
+  for (const app of chromeCandidates) {
+    const ok = (await utils.exec('/bin/sh', ['-c', `test -d "/Applications/${app}.app" && echo yes`])).stdout.trim();
+    if (ok === 'yes') { CHROME = app; break; }
+  }
+  // Also check ~/Applications
+  if (!CHROME) {
+    for (const app of chromeCandidates) {
+      const ok = (await utils.exec('/bin/sh', ['-c', `test -d "$HOME/Applications/${app}.app" && echo yes`])).stdout.trim();
+      if (ok === 'yes') { CHROME = app; break; }
+    }
+  }
+
+  iina.console.log('[Cast] python=' + PYTHON + ' server=' + SERVER_PY + ' cloudflared=' + CLOUDFLARED + ' chrome=' + CHROME);
 }
-const PAGE_HTML = '/tmp/iina_cast_page.html';
 
 function isLocalFile(url) {
   return url && (url.startsWith('file://') || url.startsWith('/'));
 }
 
 function toLocalPath(url) {
-  // file:///Volumes/... -> slice(7) gives /Volumes/...
-  // file://Volumes/...  -> slice(7) gives Volumes/... (needs leading slash)
   const path = decodeURIComponent(url.slice(7));
   return path.startsWith('/') ? path : '/' + path;
 }
 
-async function run(cmd) {
-  try { return (await utils.exec('/bin/sh', ['-c', cmd])).stdout || ''; }
-  catch(e) { return ''; }
+async function getTunnelUrl() {
+  if (!CLOUDFLARED) return null;
+  await utils.exec('/bin/sh', ['-c', 'pkill -f "cloudflared tunnel" 2>/dev/null; sleep 0.3']);
+  await utils.exec('/bin/sh', ['-c',
+    `nohup "${CLOUDFLARED}" tunnel --url http://localhost:${HTTP_PORT} --no-autoupdate > /tmp/iina_cf.log 2>&1 &`
+  ]);
+  for (let i = 0; i < 20; i++) {
+    await utils.exec('/bin/sh', ['-c', 'sleep 0.5']);
+    const log = (await utils.exec('/bin/sh', ['-c', 'cat /tmp/iina_cf.log 2>/dev/null'])).stdout;
+    const m = log.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+    if (m) return m[0];
+  }
+  return null;
 }
 
-async function getLocalIP() {
-  const out = (await utils.exec('/bin/sh', ['-c', 'ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null'])).stdout.trim();
-  return out || '127.0.0.1';
-}
-
-function buildCastPage(mediaUrl) {
+function buildCastPage(mediaUrl, tunnelUrl) {
   const so = '<scr' + 'ipt>';
   const sc = '<' + '/scr' + 'ipt>';
-  const js = 'document.getElementById("v").src=' + JSON.stringify(mediaUrl) + ';';
+  const infoHtml = tunnelUrl
+    ? `<p>Public URL (works on any network):<br><a href="${tunnelUrl}/video" style="color:#4af">${tunnelUrl}/video</a></p>`
+    : `<p>No tunnel active — local network only.</p>`;
+  const js = `document.getElementById("v").src=${JSON.stringify(mediaUrl)};`;
   return [
     '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>IINA Cast</title>',
-    '<style>body{margin:0;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:12px;font-family:-apple-system,sans-serif;color:#fff}video{max-width:100%;max-height:80vh}p{font-size:13px;color:#aaa;text-align:center;margin:0}b{color:#fff}</style>',
-    '</head><body>',
+    '<style>body{margin:0;background:#000;display:flex;flex-direction:column;align-items:center;',
+    'justify-content:center;height:100vh;gap:12px;font-family:-apple-system,sans-serif;color:#fff}',
+    'video{max-width:100%;max-height:75vh}p{font-size:12px;color:#aaa;text-align:center;margin:0;line-height:1.6}',
+    'a{color:#4af}b{color:#fff}</style></head><body>',
     '<video id="v" controls autoplay></video>',
-    '<p>Use the <b>Cast button</b> in Chrome\'s toolbar to cast to your device</p>',
+    '<p>Use the browser\'s <b>Cast</b> button — or paste the public URL into <b>getstreaming.tv</b> after pairing.</p>',
+    infoHtml,
     so, js, sc,
     '</body></html>'
   ].join('\n');
@@ -95,7 +140,11 @@ function buildCastPage(mediaUrl) {
 
 async function openCastPage() {
   if (!PYTHON) {
-    sidebar.postMessage('status', { text: 'Python 3 not found. Please install it from python.org.', error: true });
+    sidebar.postMessage('status', { text: 'Python 3 not found. Install from python.org.', error: true });
+    return;
+  }
+  if (!CHROME) {
+    sidebar.postMessage('status', { text: 'No Chromium-based browser found. Install Chrome or Chromium.', error: true });
     return;
   }
   const url = core.status.url || '';
@@ -106,28 +155,29 @@ async function openCastPage() {
 
   const local = isLocalFile(url);
   const filePath = local ? toLocalPath(url) : '';
-  const localIP = await getLocalIP();
-  const mediaUrl = local ? ('http://' + localIP + ':' + HTTP_PORT + '/video') : url;
-  const html = buildCastPage(mediaUrl);
 
-  // Write cast page and launcher via shell
+  await utils.exec('/bin/sh', ['-c', 'pkill -f "server.py" 2>/dev/null; sleep 0.3']);
+  await utils.exec('/bin/sh', ['-c',
+    `nohup "${PYTHON}" "${SERVER_PY}" "${filePath}" "/tmp/iina_cast_page.html" > /tmp/iina_cast.log 2>&1 &`
+  ]);
+  await utils.exec('/bin/sh', ['-c', 'sleep 1']);
+
+  sidebar.postMessage('status', { text: 'Starting tunnel...' });
+  const tunnelUrl = await getTunnelUrl();
+
+  const mediaUrl = local
+    ? (tunnelUrl ? tunnelUrl + '/video' : 'http://localhost:' + HTTP_PORT + '/video')
+    : url;
+
+  const html = buildCastPage(mediaUrl, tunnelUrl);
   const safeHtml = html.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
   await utils.exec('/bin/sh', ['-c', "printf '%s' '" + safeHtml + "' > /tmp/iina_cast_page.html"]);
 
-  const launcher = '/tmp/iina_cast_launch.sh';
-  const script = [
-    '#!/bin/sh',
-    'pkill -f "server.py" 2>/dev/null',
-    'sleep 0.5',
-    'nohup "' + PYTHON + '" "' + SERVER_PY + '" "$1" "/tmp/iina_cast_page.html" > /tmp/iina_cast.log 2>&1 &',
-    'sleep 1',
-    'open -a "Google Chrome" "http://localhost:' + HTTP_PORT + '"'
-  ].join('\n');
-  const safeScript = script.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
-  await utils.exec('/bin/sh', ['-c', "printf '%s' '" + safeScript + "' > " + launcher + " && chmod +x " + launcher]);
-  await utils.exec('/bin/sh', [launcher, filePath]);
+  await utils.exec('/bin/sh', ['-c', `open -a "${CHROME}" "http://localhost:${HTTP_PORT}"`]);
 
-  sidebar.postMessage('status', { text: 'Opening Chrome...' });
+  if (tunnelUrl) {
+    sidebar.postMessage('status', { text: '✅ ' + tunnelUrl + '/video' });
+  } else {
+    sidebar.postMessage('status', { text: '⚠️ Tunnel failed — local network only.', error: true });
+  }
 }
-
-

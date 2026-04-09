@@ -1,10 +1,10 @@
 {
   "name": "Google Cast",
   "identifier": "io.github.ymedh.iina-plugin-googlecast",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "ghRepo": "ymedh/iinagooglecastplugin",
   "ghVersion": 2,
-  "description": "Cast the current video from IINA to any Google Cast device on your local network.",
+  "description": "Cast the current video from IINA to any Google Cast device. Works on local networks and restricted networks (hotels, etc.) via an automatic cloudflare tunnel.",
   "author": {
     "name": "ymedh",
     "url": "https://github.com/ymedh"

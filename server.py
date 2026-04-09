@@ -4,7 +4,8 @@ import sys
 import mimetypes
 from urllib.parse import urlparse
 
-PORT = 19421
+# PORT can be overridden via environment variable IINA_CAST_PORT
+PORT = int(os.environ.get("IINA_CAST_PORT", 19421))
 FILE = sys.argv[1] if len(sys.argv) > 1 else ""
 PAGE = sys.argv[2] if len(sys.argv) > 2 else ""
 
@@ -41,6 +42,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_page()
 
     def _serve_page(self):
+        if not PAGE or not os.path.exists(PAGE):
+            self.send_response(404)
+            self.end_headers()
+            return
         with open(PAGE, "rb") as f:
             data = f.read()
         self.send_response(200)
@@ -50,6 +55,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _serve_file(self):
+        if not FILE or not os.path.exists(FILE):
+            self.send_response(404)
+            self.end_headers()
+            return
         size = os.path.getsize(FILE)
         mime = mimetypes.guess_type(FILE)[0] or "video/mp4"
         rng = self.headers.get("Range", "")

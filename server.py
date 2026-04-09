@@ -5,7 +5,6 @@ import mimetypes
 import socket
 from urllib.parse import urlparse
 
-# PORT can be overridden via environment variable IINA_CAST_PORT
 PORT = int(os.environ.get("IINA_CAST_PORT", 19421))
 FILE = sys.argv[1] if len(sys.argv) > 1 else ""
 PAGE = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -16,7 +15,6 @@ class Server(http.server.HTTPServer):
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    # Use HTTP/1.0 — compatible with cloudflared tunnel proxying
     protocol_version = "HTTP/1.0"
 
     def log_message(self, *args):
@@ -96,7 +94,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self.wfile.write(chunk)
                     remaining -= len(chunk)
         except (BrokenPipeError, ConnectionResetError, socket.error):
-            pass  # Client disconnected — not an error
+            pass
 
 
 Server(("0.0.0.0", PORT), Handler).serve_forever()

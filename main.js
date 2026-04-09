@@ -106,7 +106,7 @@ async function getTunnelUrl() {
   if (!CLOUDFLARED) return null;
   await utils.exec('/bin/sh', ['-c', 'pkill -f "cloudflared tunnel" 2>/dev/null; sleep 0.3']);
   await utils.exec('/bin/sh', ['-c',
-    `nohup "${CLOUDFLARED}" tunnel --url http://localhost:${HTTP_PORT} --no-autoupdate > /tmp/iina_cf.log 2>&1 &`
+    `nohup "${CLOUDFLARED}" tunnel --url http://localhost:${HTTP_PORT} --no-autoupdate --protocol http2 --ha-connections 4 > /tmp/iina_cf.log 2>&1 &`
   ]);
   let tunnelUrl = null;
   for (let i = 0; i < 20; i++) {

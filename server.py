@@ -2,6 +2,7 @@ import http.server
 import os
 import sys
 import mimetypes
+import socket
 from urllib.parse import urlparse
 
 # PORT can be overridden via environment variable IINA_CAST_PORT
@@ -15,6 +16,9 @@ class Server(http.server.HTTPServer):
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    # HTTP/1.1 keeps connections alive for sustained streaming
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, *args):
         pass
 
@@ -28,10 +32,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(size))
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Connection", "keep-alive")
             self.end_headers()
         else:
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", "0")
+            self.send_header("Connection", "keep-alive")
             self.end_headers()
 
     def do_GET(self):
@@ -44,6 +51,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def _serve_page(self):
         if not PAGE or not os.path.exists(PAGE):
             self.send_response(404)
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return
         with open(PAGE, "rb") as f:
@@ -51,12 +59,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("Connection", "keep-alive")
         self.end_headers()
         self.wfile.write(data)
 
     def _serve_file(self):
         if not FILE or not os.path.exists(FILE):
             self.send_response(404)
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return
         size = os.path.getsize(FILE)
@@ -75,18 +85,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(length))
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "keep-alive")
         if code == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
-        with open(FILE, "rb") as f:
-            f.seek(start)
-            remaining = length
-            while remaining:
-                chunk = f.read(min(65536, remaining))
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-                remaining -= len(chunk)
+        try:
+            with open(FILE, "rb") as f:
+                f.seek(start)
+                remaining = length
+                while remaining:
+                    chunk = f.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError, socket.error):
+            pass  # Client disconnected — not an error
 
 
 Server(("0.0.0.0", PORT), Handler).serve_forever()

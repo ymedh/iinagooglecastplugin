@@ -143,10 +143,13 @@ async function getTunnelUrl() {
 function buildCastPage(mediaUrl, tunnelUrl) {
   const so = '<scr' + 'ipt>';
   const sc = '<' + '/scr' + 'ipt>';
+  // Chrome on this Mac loads from localhost — bypasses all DNS issues.
+  // Tunnel URL is shown as a clickable link to paste into getstreaming.tv for the TV.
   const infoHtml = tunnelUrl
-    ? `<p>Public URL (works on any network):<br><a href="${tunnelUrl}/video" style="color:#4af">${tunnelUrl}/video</a></p>`
+    ? `<p>Paste into <b>getstreaming.tv</b> after pairing with your TV code:<br>` +
+      `<a href="${tunnelUrl}/video" style="color:#4af">${tunnelUrl}/video</a></p>`
     : `<p>No tunnel active — local network only.</p>`;
-  const js = `document.getElementById("v").src=${JSON.stringify(mediaUrl)};`;
+  const js = `document.getElementById("v").src="http://localhost:${HTTP_PORT}/video";`;
   return [
     '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>IINA Cast</title>',
     '<style>body{margin:0;background:#000;display:flex;flex-direction:column;align-items:center;',

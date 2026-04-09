@@ -134,7 +134,7 @@ async function getTunnelUrl() {
       `sudo sh -c "grep -v trycloudflare /etc/hosts > /tmp/hosts_tmp && ` +
       `echo '${dohResult} ${host}' >> /tmp/hosts_tmp && cp /tmp/hosts_tmp /etc/hosts"`
     ]);
-    await utils.exec('/bin/sh', ['-c', 'sudo killall -HUP mDNSResponder 2>/dev/null; sleep 0.5']);
+    await utils.exec('/bin/sh', ['-c', 'sudo killall -9 mDNSResponder 2>/dev/null; sleep 1']);
   }
 
   return tunnelUrl;

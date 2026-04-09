@@ -104,35 +104,40 @@ function toLocalPath(url) {
 
 async function getTunnelUrl() {
   if (!CLOUDFLARED) return null;
-  // Ensure DNS can resolve trycloudflare.com — hotel DNS often blocks it.
-  // Auto-add public DNS resolvers if needed.
-  const dnsOk = (await utils.exec('/bin/sh', ['-c',
-    'dscacheutil -q host -a name trycloudflare.com 2>/dev/null | grep -c ip_address || echo 0'
-  ])).stdout.trim();
-  if (dnsOk === '0') {
-    const iface = (await utils.exec('/bin/sh', ['-c',
-      "networksetup -listallnetworkservices | grep -i wi | head -1"
-    ])).stdout.trim();
-    if (iface) {
-      await utils.exec('/bin/sh', ['-c',
-        `networksetup -setdnsservers "${iface}" 8.8.8.8 1.1.1.1`
-      ]);
-      await utils.exec('/bin/sh', ['-c',
-        'dscacheutil -flushcache; killall -HUP mDNSResponder 2>/dev/null; sleep 1'
-      ]);
-    }
-  }
   await utils.exec('/bin/sh', ['-c', 'pkill -f "cloudflared tunnel" 2>/dev/null; sleep 0.3']);
   await utils.exec('/bin/sh', ['-c',
-    `nohup "${CLOUDFLARED}" tunnel --url http://localhost:${HTTP_PORT} --no-autoupdate --protocol http2 > /tmp/iina_cf.log 2>&1 &`
+    `nohup "${CLOUDFLARED}" tunnel --url http://localhost:${HTTP_PORT} --no-autoupdate > /tmp/iina_cf.log 2>&1 &`
   ]);
+  let tunnelUrl = null;
   for (let i = 0; i < 20; i++) {
     await utils.exec('/bin/sh', ['-c', 'sleep 0.5']);
     const log = (await utils.exec('/bin/sh', ['-c', 'cat /tmp/iina_cf.log 2>/dev/null'])).stdout;
     const m = log.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-    if (m) return m[0];
+    if (m) { tunnelUrl = m[0]; break; }
   }
-  return null;
+  if (!tunnelUrl) return null;
+
+  // Hotel DNS may block *.trycloudflare.com resolution for apps (mDNSResponder).
+  // Use DNS-over-HTTPS to resolve the hostname and write a /etc/hosts entry
+  // so all apps on this machine can reach the tunnel URL.
+  const host = tunnelUrl.replace('https://', '');
+  const dohResult = (await utils.exec('/bin/sh', ['-c',
+    `curl -sf "https://cloudflare-dns.com/dns-query?name=${host}&type=A" ` +
+    `-H "accept: application/dns-json" | python3 -c ` +
+    `"import sys,json; d=json.load(sys.stdin); ` +
+    `print(next((a['data'] for a in d.get('Answer',[]) if a['type']==1),''))" 2>/dev/null`
+  ])).stdout.trim();
+
+  if (dohResult) {
+    // Remove any stale trycloudflare entries then add the resolved IP
+    await utils.exec('/bin/sh', ['-c',
+      `sudo sh -c "grep -v trycloudflare /etc/hosts > /tmp/hosts_tmp && ` +
+      `echo '${dohResult} ${host}' >> /tmp/hosts_tmp && cp /tmp/hosts_tmp /etc/hosts"`
+    ]);
+    await utils.exec('/bin/sh', ['-c', 'sudo killall -HUP mDNSResponder 2>/dev/null; sleep 0.5']);
+  }
+
+  return tunnelUrl;
 }
 
 function buildCastPage(mediaUrl, tunnelUrl) {

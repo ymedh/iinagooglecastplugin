@@ -117,13 +117,15 @@ async function getTunnelUrl() {
   return null;
 }
 
-function buildCastPage(mediaUrl, tunnelUrl) {
+function buildCastPage(localMediaUrl, tunnelUrl) {
   const so = '<scr' + 'ipt>';
   const sc = '<' + '/scr' + 'ipt>';
+  // Chrome on this Mac always uses localhost for playback (fast, no tunnel latency).
+  // Tunnel URL is shown separately — paste it into getstreaming.tv for casting to TV.
   const infoHtml = tunnelUrl
-    ? `<p>Public URL (works on any network):<br><a href="${tunnelUrl}/video" style="color:#4af">${tunnelUrl}/video</a></p>`
-    : `<p>No tunnel active — local network only.</p>`;
-  const js = `document.getElementById("v").src=${JSON.stringify(mediaUrl)};`;
+    ? `<p>Paste into <b>getstreaming.tv</b> after pairing:<br><a href="${tunnelUrl}/video" style="color:#4af">${tunnelUrl}/video</a></p>`
+    : `<p>No tunnel — local network only.</p>`;
+  const js = `document.getElementById("v").src=${JSON.stringify(localMediaUrl)};`;
   return [
     '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>IINA Cast</title>',
     '<style>body{margin:0;background:#000;display:flex;flex-direction:column;align-items:center;',
@@ -131,7 +133,7 @@ function buildCastPage(mediaUrl, tunnelUrl) {
     'video{max-width:100%;max-height:75vh}p{font-size:12px;color:#aaa;text-align:center;margin:0;line-height:1.6}',
     'a{color:#4af}b{color:#fff}</style></head><body>',
     '<video id="v" controls autoplay></video>',
-    '<p>Use the browser\'s <b>Cast</b> button — or paste the public URL into <b>getstreaming.tv</b> after pairing.</p>',
+    '<p>Use the browser\'s <b>Cast</b> button — or paste the public URL into <b>getstreaming.tv</b>.</p>',
     infoHtml,
     so, js, sc,
     '</body></html>'
@@ -165,11 +167,13 @@ async function openCastPage() {
   sidebar.postMessage('status', { text: 'Starting tunnel...' });
   const tunnelUrl = await getTunnelUrl();
 
-  const mediaUrl = local
-    ? (tunnelUrl ? tunnelUrl + '/video' : 'http://localhost:' + HTTP_PORT + '/video')
+  // Chrome on this Mac always loads from localhost — fast and reliable.
+  // Tunnel URL is only used for getstreaming.tv / casting from TV.
+  const localMediaUrl = local
+    ? 'http://localhost:' + HTTP_PORT + '/video'
     : url;
 
-  const html = buildCastPage(mediaUrl, tunnelUrl);
+  const html = buildCastPage(localMediaUrl, tunnelUrl);
   const safeHtml = html.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
   await utils.exec('/bin/sh', ['-c', "printf '%s' '" + safeHtml + "' > /tmp/iina_cast_page.html"]);
 

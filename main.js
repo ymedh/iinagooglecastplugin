@@ -117,15 +117,13 @@ async function getTunnelUrl() {
   return null;
 }
 
-function buildCastPage(localMediaUrl, tunnelUrl) {
+function buildCastPage(mediaUrl, tunnelUrl) {
   const so = '<scr' + 'ipt>';
   const sc = '<' + '/scr' + 'ipt>';
-  // Chrome on this Mac always uses localhost for playback (fast, no tunnel latency).
-  // Tunnel URL is shown separately — paste it into getstreaming.tv for casting to TV.
   const infoHtml = tunnelUrl
-    ? `<p>Paste into <b>getstreaming.tv</b> after pairing:<br><a href="${tunnelUrl}/video" style="color:#4af">${tunnelUrl}/video</a></p>`
-    : `<p>No tunnel — local network only.</p>`;
-  const js = `document.getElementById("v").src=${JSON.stringify(localMediaUrl)};`;
+    ? `<p>Public URL (works on any network):<br><a href="${tunnelUrl}/video" style="color:#4af">${tunnelUrl}/video</a></p>`
+    : `<p>No tunnel active — local network only.</p>`;
+  const js = `document.getElementById("v").src=${JSON.stringify(mediaUrl)};`;
   return [
     '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>IINA Cast</title>',
     '<style>body{margin:0;background:#000;display:flex;flex-direction:column;align-items:center;',
@@ -167,10 +165,8 @@ async function openCastPage() {
   sidebar.postMessage('status', { text: 'Starting tunnel...' });
   const tunnelUrl = await getTunnelUrl();
 
-  // Chrome on this Mac always loads from localhost — fast and reliable.
-  // Tunnel URL is only used for getstreaming.tv / casting from TV.
   const localMediaUrl = local
-    ? 'http://localhost:' + HTTP_PORT + '/video'
+    ? (tunnelUrl ? tunnelUrl + '/video' : 'http://localhost:' + HTTP_PORT + '/video')
     : url;
 
   const html = buildCastPage(localMediaUrl, tunnelUrl);

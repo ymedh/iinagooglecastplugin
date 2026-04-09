@@ -16,8 +16,8 @@ class Server(http.server.HTTPServer):
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    # HTTP/1.1 keeps connections alive for sustained streaming
-    protocol_version = "HTTP/1.1"
+    # Use HTTP/1.0 — compatible with cloudflared tunnel proxying
+    protocol_version = "HTTP/1.0"
 
     def log_message(self, *args):
         pass
@@ -32,13 +32,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(size))
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Connection", "keep-alive")
             self.end_headers()
         else:
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", "0")
-            self.send_header("Connection", "keep-alive")
             self.end_headers()
 
     def do_GET(self):
@@ -59,7 +57,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Connection", "keep-alive")
         self.end_headers()
         self.wfile.write(data)
 
@@ -85,7 +82,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(length))
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Connection", "keep-alive")
         if code == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()

@@ -104,6 +104,24 @@ function toLocalPath(url) {
 
 async function getTunnelUrl() {
   if (!CLOUDFLARED) return null;
+  // Ensure DNS can resolve trycloudflare.com — hotel DNS often blocks it.
+  // Auto-add public DNS resolvers if needed.
+  const dnsOk = (await utils.exec('/bin/sh', ['-c',
+    'dscacheutil -q host -a name trycloudflare.com 2>/dev/null | grep -c ip_address || echo 0'
+  ])).stdout.trim();
+  if (dnsOk === '0') {
+    const iface = (await utils.exec('/bin/sh', ['-c',
+      "networksetup -listallnetworkservices | grep -i wi | head -1"
+    ])).stdout.trim();
+    if (iface) {
+      await utils.exec('/bin/sh', ['-c',
+        `networksetup -setdnsservers "${iface}" 8.8.8.8 1.1.1.1`
+      ]);
+      await utils.exec('/bin/sh', ['-c',
+        'dscacheutil -flushcache; killall -HUP mDNSResponder 2>/dev/null; sleep 1'
+      ]);
+    }
+  }
   await utils.exec('/bin/sh', ['-c', 'pkill -f "cloudflared tunnel" 2>/dev/null; sleep 0.3']);
   await utils.exec('/bin/sh', ['-c',
     `nohup "${CLOUDFLARED}" tunnel --url http://localhost:${HTTP_PORT} --no-autoupdate --protocol http2 > /tmp/iina_cf.log 2>&1 &`

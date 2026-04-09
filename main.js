@@ -120,10 +120,16 @@ async function getTunnelUrl() {
 function buildCastPage(mediaUrl, tunnelUrl) {
   const so = '<scr' + 'ipt>';
   const sc = '<' + '/scr' + 'ipt>';
+  const localSrc = 'http://localhost:' + HTTP_PORT + '/video';
   const infoHtml = tunnelUrl
     ? `<p>Public URL (works on any network):<br><a href="${tunnelUrl}/video" style="color:#4af">${tunnelUrl}/video</a></p>`
     : `<p>No tunnel active — local network only.</p>`;
-  const js = `document.getElementById("v").src=${JSON.stringify(mediaUrl)};`;
+  // Chrome plays from localhost for instant playback.
+  // A hidden <source> with the tunnel URL lets the Cast SDK send the public URL to the TV.
+  const js = [
+    'document.getElementById("v").src=' + JSON.stringify(localSrc) + ';',
+    'document.getElementById("cast-src").src=' + JSON.stringify(mediaUrl) + ';'
+  ].join('\n');
   return [
     '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>IINA Cast</title>',
     '<style>body{margin:0;background:#000;display:flex;flex-direction:column;align-items:center;',
@@ -131,6 +137,7 @@ function buildCastPage(mediaUrl, tunnelUrl) {
     'video{max-width:100%;max-height:75vh}p{font-size:12px;color:#aaa;text-align:center;margin:0;line-height:1.6}',
     'a{color:#4af}b{color:#fff}</style></head><body>',
     '<video id="v" controls autoplay></video>',
+    '<video id="cast-src" style="display:none"></video>',
     '<p>Use the browser\'s <b>Cast</b> button — or paste the public URL into <b>getstreaming.tv</b>.</p>',
     infoHtml,
     so, js, sc,
